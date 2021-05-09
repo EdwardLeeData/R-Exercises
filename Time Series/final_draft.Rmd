@@ -1,0 +1,229 @@
+---
+title: "TimeSeries"
+output: pdf_document
+---
+```{r}
+#Libraries used
+library(qpcR)
+library(readxl)
+library(forecast)
+library(MASS)
+library(readr)
+library(ggplot2)
+library(astsa)
+library(tseries)
+```
+
+```{r}
+#Importing code
+ontario_excel <- read.csv("ontariocsv.csv")
+death <- ontario_excel
+death <- ts(death)
+```
+
+
+# creating initial time series
+```{r}
+plot(death, ylab = "Deaths", main = "Time Series of Monthly Traffic Fatalities in Ontario", col = "blue")
+ # Exploratory Analysis
+```
+ 
+# Creating matrix of monthly accidents with years as rows and columns as months
+ 
+ 
+```{r} 
+year = matrix(NA, nrow = 15, ncol = 12)
+rownames(year) <- paste(1960:1974)
+colnames(year) <- paste(c('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'))
+ 
+for (i in 0:14) {
+  year[i+1,] <- death[((i*12)+1):(12*(i+1))]
+}
+ 
+year
+```
+
+# August and September tend to be the higher death months while January and February tend to be the lower death months.  This shows that there is a seasonal component to the time series.
+
+Calculating sample mean for each year
+```{r}
+# Calculating sample mean for each year
+mean.values = c(rep(0, 15))
+for (i in 1:15) {
+  mean.values[i] <- mean(year[i,])
+}
+mean.values
+# There seems to be an increasing mean as each year increases.  This leads us to believe that there is a trend in the time series.
+```
+
+Calculating sample variance for each year
+```{r}
+var.values = c(rep(0, 15))
+for (i in 1:15) {
+  var.values[i] <- var(year[i,])
+}
+var.values
+# There seems to be an increasing variance as each year increases.
+```
+Box-Cox Transformation
+```{r}
+bcTransform <- boxcox(death~ as.numeric(1:length(death)))
+lambda.estimate <- bcTransform$x[which(bcTransform$y == max(bcTransform$y))]
+ 
+ 
+lambda.estimate.values <- bcTransform$x[bcTransform$y > max(bcTransform$y) - 1/2 * qchisq(.95,1)] # Values above 95% CI line
+lambda.lower.bound <- min(lambda.estimate.values)
+lambda.upper.bound <- max(lambda.estimate.values)
+ 
+lambda.estimate
+
+lambda.lower.bound
+
+lambda.upper.bound
+```
+
+Square Root Transformation
+```{r}
+death.sqrt <- sqrt(death)
+var(death.sqrt) #variance of transformed time series
+```
+
+ACF and PACF of Square Root Transformed Data
+```{r}
+op <- par(mfrow = c(1,2))
+ts.plot(death, main = "Original Data", ylab = expression(X[t]))
+ts.plot(death.sqrt, main = "Square Root Transformed Data", ylab = expression(Y[t]))
+ 
+par(op)
+Diffencing
+death.lag12 <- diff(death.sqrt, lag = 12)
+ 
+death.lagged <- diff(death.lag12, lag = 1)
+var(death.lagged)
+
+var(death.lag12)  # differenced at lag 12
+
+var(death.lagged) # then differenced at lag 1
+
+# therefore not necessary to difference at lag 1 to remove trend because it increases variance
+```
+
+Dickey-Fuller Test
+```{r}
+adf.test(death.lag12)
+```
+
+Time Series of Differenced and transformed series and Times Sereis with just tranformation
+```{r}
+ts.plot(death.lag12, main = "De-seasonalized/Sqrt Ttransformed Time Series", ylab = expression(nabla^{12}~nabla~Y[t]))
+abline(h=0, lty = 2)
+ 
+ts.plot(death.sqrt, main = "Sqrt Transformed Time Series")
+```
+
+ACF/PACF of transformed and differenced time series
+```{r}
+# re-calculate the sample variance and examine the ACF and PACF
+op = par(mfrow = c(1,2))
+acf(death.lag12, lag.max = 40, main = "")
+pacf(death.lag12, lag.max = 40, main = "")
+title("", line = -1, outer=TRUE)
+ 
+par(op)
+```
+
+
+AICc chart of possible models
+```{r}
+aiccs <- matrix(0,nrow = 5,ncol = 5)
+dimnames(aiccs) <- list(p = 0:4, q = 0:4)
+for (i in 0:4){
+6
+for (j in 0:4){
+aiccs[i+1,j+1] <- AICc(arima(death.lag12,order = c(i,0,j),method = "ML"))
+}
+}
+aiccs
+```
+
+Parameters of desired model type arima(1,0,1)
+```{r}
+fit <- Arima(death.lag12, order=c(1,0,1))
+fit
+```
+
+Yule-Walker
+```{r}
+(fit <- ar(death.lag12, method = "yule-walker"))
+```
+
+Diagnostics
+```{r}
+i <- arima(death.lag12, order = c(1,0,1), method = "ML", xreg = 1:length(death.lag12))
+ 
+residuals <- resid(i)
+Checking for normality
+plot(residuals)
+ 
+hist(residuals, probability = T, main = "", xlab = "Residuals")
+ 
+shapiro.test(residuals)
+
+mean(residuals)
+
+var(residuals)
+
+qqnorm(residuals)
+qqline(residuals, col = "red")
+```
+
+Checking for serial correlation
+```{r}
+Box.test(residuals, lag = 11, type = c("Ljung-Box"), fitdf = 2)
+Box.test(residuals, lag = 11, type = c("Box-Pierce"), fitdf = 2)
+```
+
+Checking for heteroskedacity
+```{r}
+op <- par(mfrow = c(1,2))
+acf(residuals, main = "", lag.max = 40)
+pacf(residuals, main = "", lag.max = 40)
+ 
+par(op)
+#we have arma(1,0,1) model
+```
+
+Forecast Prediction 
+```{r}
+op = par(mfrow = c(1,1))
+data_pred = predict(fit, n.ahead=12)
+ts.plot(ontario, xlim = c(1,200), ylim=c(0,300), ylab="Deaths")
+points(169:180, exp(data_pred$pred), col = "red", pch=20)
+lines(169:180, exp(data_pred$pred+1.96*data_pred$se), lty=2)
+lines(169:180, exp(data_pred$pred-1.96*data_pred$se), lty=2)
+
+#legend
+legend("topleft", legend = c("Predicted", "Observed"), col=c("red","black"), lty=1, cex = 0.7)
+```
+
+zoom in
+```{r}
+# zoom in at the predicted points
+ts.plot(ontario, xlim=c(160, 185), ylim=c(10, 300), main = "Zoomed-in", ylab = "Deaths")
+points(169:180, exp(data_pred$pred), col = "red", pch=20)
+lines(169:180, exp(data_pred$pred+1.96*data_pred$se), lty=2)
+lines(169:180, exp(data_pred$pred-1.96*data_pred$se), lty=2)
+
+#legend
+legend("bottomright", legend = c("Predicted", "Observed"), col=c("red","black"), lty=1, cex = 0.7)
+```
+
+fitted vs observed
+```{r}
+#observed and fitted plot
+ts.plot(death, lwd=1, lty=1, main = "Fitted vs Observed")
+lines(exp(fit$fitted), lwd=1, lty=1, col="red")
+
+#legend
+legend("bottomright", legend = "Fitted", col="red", lty=1, cex = 0.6)
+```
